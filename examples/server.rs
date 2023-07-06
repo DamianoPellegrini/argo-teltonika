@@ -1,6 +1,6 @@
 use std::io;
 
-use argo_teltonika::{Argo, Plugin, TeltonikaEvent};
+use argo_teltonika::{Argo, DebugPlugin, Plugin, TeltonikaEvent};
 
 struct TestRedis;
 
@@ -27,7 +27,8 @@ fn main() -> io::Result<()> {
     env_logger::init();
     let mut a = Argo::new("127.0.0.1:56552");
 
-    a.add_plugin(TestRedis);
+    a.add_plugin(DebugPlugin);
+    // a.add_plugin(TestRedis);
     a.run()?;
     Ok(())
 }

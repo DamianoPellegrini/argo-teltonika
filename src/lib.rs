@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    io::{self, Read, Write},
+    io,
     net::{self, SocketAddr, TcpStream},
     sync::Arc,
 };
@@ -72,6 +72,39 @@ pub trait Plugin {
     fn on_teltonika_event(&mut self, imei: &str, event: &TeltonikaEvent);
 }
 
+pub struct DebugPlugin;
+
+impl Plugin for DebugPlugin {
+    fn on_teltonika_connected(&mut self, imei: &str) {
+        log::debug!(
+            target: &format!("{} {imei:15}", module_path!()),
+            "connected"
+        );
+    }
+
+    fn on_teltonika_disconnected(&mut self, imei: &str) {
+        log::debug!(
+            target: &format!("{} {imei:15}", module_path!()),
+            "disconnected"
+        );
+    }
+
+    fn on_teltonika_event(&mut self, imei: &str, event: &TeltonikaEvent) {
+        let mut event_str = format!("Sent an event:");
+
+        for record in event.records.iter() {
+            event_str.push_str(&format!(
+                "\r\n{:>10}- Position: {2}, {3}, {4} at {1}",
+                "", record.timestamp, record.latitude, record.longitude, record.altitude
+            ));
+        }
+        log::debug!(
+            target: &format!("{} {imei:15}", module_path!()),
+            "{event_str}"
+        );
+    }
+}
+
 pub struct Argo<'a> {
     /// The socket address to listen on
     socket_addr: SocketAddr,
@@ -112,31 +145,43 @@ impl<'a> Argo<'a> {
         Ok(())
     }
 
-    fn handle_connection(&self, mut stream: TcpStream) -> io::Result<()> {
+    fn handle_connection(&self, stream: TcpStream) -> io::Result<()> {
+        let mut teltonika_stream = nom_teltonika::TeltonikaStream::new(
+            stream.try_clone().expect("No more handles available"),
+        );
         let peer_addr = stream.peer_addr()?;
         log::debug!(
             target: &format!("{} {peer_addr}", module_path!()),
             "Connection received"
         );
 
-        // Should be enough bytes, no need for a loop here
-        let mut imei_buffer = [0u8; 128];
-        let bytes_read = stream
-            .read(&mut imei_buffer)
-            .expect("Cannot read to IMEI buffer");
+        let imei = match teltonika_stream.read_imei() {
+            Ok(imei) => imei,
+            Err(e) => match e.kind() {
+                io::ErrorKind::InvalidData => {
+                    log::error!(
+                        target: &format!("{} {peer_addr}", module_path!()),
+                        "Error parsing IMEI, closing connection"
+                    );
 
-        if bytes_read == 0 {
-            log::debug!(
-                target: &format!("{} {peer_addr}", module_path!()),
-                "Connection closed while reading IMEI"
-            );
+                    teltonika_stream.write_imei_denial()?;
+                    stream.shutdown(net::Shutdown::Both)?;
 
-            // TODO: Do I consider this as handled or as an error?
-            return Ok(());
-        }
+                    return Ok(());
+                }
+                io::ErrorKind::ConnectionReset => {
+                    log::debug!(
+                        target: &format!("{} {peer_addr}", module_path!()),
+                        "Connection reset by peer"
+                    );
 
-        let (_, imei) = nom_teltonika::parser::imei(&imei_buffer)
-            .expect("Error parsing IMEI, should shutdown connection");
+                    return Ok(());
+                }
+                _ => {
+                    return Err(e);
+                }
+            },
+        };
 
         let mut plugins_ref = self.plugins.borrow_mut();
         let mut allowed_plugins: Vec<&mut Box<dyn Plugin>> = plugins_ref
@@ -155,8 +200,7 @@ impl<'a> Argo<'a> {
                 target: &format!("{} {imei:15} ({peer_addr})", module_path!()),
                 "Connection denied, sending IMEI Denial"
             );
-            stream.write_all(b"\x00").expect("Cannot write IMEI Denial");
-            stream.flush().expect("Cannot flush stream");
+            teltonika_stream.write_imei_denial()?;
             stream
                 .shutdown(net::Shutdown::Both)
                 .expect("Cannot shutdown connection");
@@ -170,10 +214,7 @@ impl<'a> Argo<'a> {
             "Connection accepted, sending IMEI Approval"
         );
 
-        stream
-            .write_all(b"\x01")
-            .expect("Cannot write IMEI Approval");
-        stream.flush().expect("Cannot flush stream");
+        teltonika_stream.write_imei_approval()?;
 
         for listener in allowed_plugins.iter_mut() {
             listener.on_teltonika_connected(&imei);
@@ -184,87 +225,56 @@ impl<'a> Argo<'a> {
 
         // Infinitely read packets
         'packet_loop: loop {
-            let mut parsing_buffer: Vec<u8> = Vec::with_capacity(1024);
+            let packet = match teltonika_stream.read_packet() {
+                Ok(packet) => {
+                    teltonika_stream.write_packet_ack(Some(packet.records.len() as u32))?;
 
-            // Read bytes until they are enough
-            'reader_loop: loop {
-                let mut incoming_buffer = [0u8; 1024];
-                let bytes_read = stream
-                    .read(&mut incoming_buffer)
-                    .expect("Cannot read to incoming buffer");
-
-                if bytes_read == 0 {
-                    log::debug!(
-                        target: &format!("{} {imei}", module_path!()),
-                        "Connection closed while reading packet"
-                    );
-                    break 'packet_loop;
+                    packet
                 }
-
-                parsing_buffer.extend_from_slice(&incoming_buffer);
-
-                let packet_parser_result = nom_teltonika::parser::tcp_packet(&parsing_buffer[..]);
-
-                // TODO: Add a timeout/retry system here
-                match packet_parser_result {
-                    Err(nom::Err::Incomplete(_)) => {
-                        continue 'reader_loop;
-                    }
-                    Err(nom::Err::Error(_) | nom::Err::Failure(_)) => {
-                        // Error parsing, should ask for a resend
+                Err(e) => match e.kind() {
+                    io::ErrorKind::InvalidData => {
                         log::error!(
                             target: &format!("{} {imei}", module_path!()),
                             "Error parsing packet, sending NACK",
                         );
-                        stream
-                            .write_all(&0_u32.to_be_bytes())
-                            .expect("Cannot write packet NACK");
-                        stream.flush().expect("Cannot flush stream");
 
-                        continue 'packet_loop;
-                        // break 'reader_loop;
+                        teltonika_stream.write_packet_ack(None)?;
+
+                        continue;
                     }
-                    Ok((_, packet)) => {
-                        // Send record len as ACK
-                        stream
-                            .write_all(&(packet.records.len() as u32).to_be_bytes())
-                            .expect("Cannot write packet ACK");
-                        stream.flush().expect("Cannot flush stream");
+                    io::ErrorKind::ConnectionReset => {
+                        log::debug!(
+                            target: &format!("{} {imei}", module_path!()),
+                            "Connection reset by peer, closing connection"
+                        );
 
-                        // Check if the packet is a duplicate
-                        if let Some(last_packet) = &last_packet {
-                            // should be different every packet, i think i will hardly find two packets with the same crc one after the other
-                            if last_packet.crc16 == packet.crc16
-                                && last_packet.records[0].timestamp == packet.records[0].timestamp
-                            {
-                                log::debug!(
-                                    target: &format!("{} {imei}", module_path!()),
-                                    "Packet is a duplicate, ignoring"
-                                );
-                                continue 'packet_loop;
-                                // break 'reader_loop;
-                            }
-                        }
-                        last_packet = Some(packet.clone());
-
-                        for (idx, record) in packet.records.iter().enumerate() {
-                            log::debug!(
-                                target: &format!("{} {imei}", module_path!()),
-                                "#{idx} Record timestamp: {timestamp:?}",
-                                idx = idx + 1,
-                                timestamp = record.timestamp
-                            );
-                        }
-
-                        let event: TeltonikaEvent = packet.into();
-
-                        for listener in allowed_plugins.iter_mut() {
-                            listener.on_teltonika_event(&imei, &event);
-                        }
-
-                        break 'reader_loop;
+                        break;
                     }
+                    _ => {
+                        return Err(e);
+                    }
+                },
+            };
+
+            // Check if the packet is a duplicate
+            if let Some(last_packet) = &last_packet {
+                // should be different every packet, i think i will hardly find two packets with the same crc one after the other
+                if last_packet.crc16 == packet.crc16
+                    && last_packet.records[0].timestamp == packet.records[0].timestamp
+                {
+                    log::debug!(
+                        target: &format!("{} {imei}", module_path!()),
+                        "Packet is a duplicate, ignoring"
+                    );
+                    continue 'packet_loop;
                 }
+            }
+            last_packet = Some(packet.clone());
+
+            let event: TeltonikaEvent = packet.into();
+
+            for listener in allowed_plugins.iter_mut() {
+                listener.on_teltonika_event(&imei, &event);
             }
         }
 
