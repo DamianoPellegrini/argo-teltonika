@@ -1,8 +1,7 @@
 use std::{
-    cell::RefCell,
     io,
     net::{self, SocketAddr, TcpStream},
-    sync::Arc,
+    sync::{Arc, Mutex, RwLock},
 };
 
 pub use nom_teltonika::{
@@ -105,27 +104,31 @@ impl Plugin for DebugPlugin {
     }
 }
 
-pub struct Argo<'a> {
+type PluginHandle = Arc<Mutex<dyn Plugin + Send + Sync>>;
+type PluginHandles = Arc<RwLock<Vec<PluginHandle>>>;
+
+pub struct Argo {
     /// The socket address to listen on
     socket_addr: SocketAddr,
 
     /// Listeners for events
-    plugins: Arc<RefCell<Vec<Box<dyn Plugin + 'a>>>>,
+    plugins: PluginHandles,
 }
 
-impl<'a> Argo<'a> {
+impl Argo {
     pub fn new(addr: impl net::ToSocketAddrs) -> Self {
         Self {
-            socket_addr: addr.to_socket_addrs().unwrap().next().unwrap(),
-            plugins: Arc::new(RefCell::new(Vec::new())),
+            socket_addr: addr
+                .to_socket_addrs()
+                .expect("Couldn't parse addr")
+                .next()
+                .expect("No addr found"),
+            plugins: Arc::new(RwLock::new(vec![])),
         }
     }
 
-    pub fn add_plugin<P>(&mut self, plugin: P)
-    where
-        P: Plugin + 'a,
-    {
-        self.plugins.borrow_mut().push(Box::new(plugin));
+    pub fn add_plugin(&mut self, plugin: impl Plugin + Sync + Send + 'static) {
+        self.plugins.write().unwrap().push(Arc::new(Mutex::new(plugin)));
     }
 
     pub fn run(&self) -> io::Result<()> {
@@ -133,49 +136,154 @@ impl<'a> Argo<'a> {
 
         log::info!("Listening on {}", self.socket_addr);
 
+        let mut handles = vec![];
+
         for client_stream in listener.incoming() {
             match client_stream {
-                Ok(client) => self.handle_connection(client)?,
+                Ok(client) => {
+                    // Clone a ref and lock as readable
+                    let plugins: PluginHandles = self.plugins.clone();
+
+                    let handle = std::thread::spawn(move || handle_connection(client, plugins));
+
+                    handles.push(handle);
+                }
                 Err(e) => {
                     log::error!("Client connection error: {}", e);
+                    continue;
+                }
+            }
+        }
+
+        for handle in handles.into_iter() {
+            match handle.join() {
+                Ok(result) => {
+                    if let Err(e) = result {
+                        log::error!("Error on connection thread: {}", e);
+                    }
+                }
+                Err(e) => {
+                    log::error!("Error on connection thread: {:?}", e);
                 }
             }
         }
 
         Ok(())
     }
+}
 
-    fn handle_connection(&self, stream: TcpStream) -> io::Result<()> {
-        let mut teltonika_stream = nom_teltonika::TeltonikaStream::new(
-            stream.try_clone().expect("No more handles available"),
-        );
-        let peer_addr = stream.peer_addr()?;
+fn handle_connection(stream: TcpStream, plugins: PluginHandles) -> io::Result<()> {
+    // Clone every plugin ref to be locked
+    // Each plugin can be locked by the individual threads
+    let plugins = plugins
+        .read()
+        .unwrap()
+        .iter()
+        .map(|plugin| plugin.clone())
+        .collect::<Vec<_>>();
+    let mut stream = nom_teltonika::TeltonikaStream::new(stream);
+    let peer_addr = stream.inner().peer_addr()?;
+    log::debug!(
+        target: &format!("{} {peer_addr}", module_path!()),
+        "Connection received"
+    );
+
+    let imei = match stream.read_imei() {
+        Ok(imei) => imei,
+        Err(e) => match e.kind() {
+            io::ErrorKind::InvalidData => {
+                log::error!(
+                    target: &format!("{} {peer_addr}", module_path!()),
+                    "Error parsing IMEI, closing connection"
+                );
+
+                stream.write_imei_denial()?;
+                stream.inner().shutdown(net::Shutdown::Both)?;
+
+                return Ok(());
+            }
+            io::ErrorKind::ConnectionReset => {
+                log::debug!(
+                    target: &format!("{} {peer_addr}", module_path!()),
+                    "Connection reset by peer"
+                );
+
+                return Ok(());
+            }
+            _ => {
+                return Err(e);
+            }
+        },
+    };
+
+    let mut allowed_plugins = plugins
+        .into_iter()
+        .filter_map(|plugin| {
+            let mut plug = plugin.lock().unwrap();
+            if plug.can_teltonika_connect(&imei) {
+                drop(plug);
+                Some(plugin)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if allowed_plugins.is_empty() {
         log::debug!(
-            target: &format!("{} {peer_addr}", module_path!()),
-            "Connection received"
+            target: &format!("{} {imei:15} ({peer_addr})", module_path!()),
+            "Connection denied, sending IMEI Denial"
         );
+        stream.write_imei_denial()?;
+        stream
+            .inner()
+            .shutdown(net::Shutdown::Both)
+            .expect("Cannot shutdown connection");
 
-        let imei = match teltonika_stream.read_imei() {
-            Ok(imei) => imei,
+        // TODO: Do I consider this as handled or as an error?
+        return Ok(());
+    }
+
+    log::debug!(
+        target: &format!("{} {imei:15} ({peer_addr})", module_path!()),
+        "Connection accepted, sending IMEI Approval"
+    );
+
+    stream.write_imei_approval()?;
+
+    for plugin in allowed_plugins.iter_mut() {
+        plugin.lock().unwrap().on_teltonika_connected(&imei);
+    }
+
+    // Last packet to check if the packet is a duplicate (eg. sent again before receiving ACK)
+    let mut last_packet: Option<AVLPacket> = None;
+
+    // Infinitely read packets
+    'packet_loop: loop {
+        let packet = match stream.read_packet() {
+            Ok(packet) => {
+                stream.write_packet_ack(Some(packet.records.len() as u32))?;
+
+                packet
+            }
             Err(e) => match e.kind() {
                 io::ErrorKind::InvalidData => {
                     log::error!(
-                        target: &format!("{} {peer_addr}", module_path!()),
-                        "Error parsing IMEI, closing connection"
+                        target: &format!("{} {imei}", module_path!()),
+                        "Error parsing packet, sending NACK",
                     );
 
-                    teltonika_stream.write_imei_denial()?;
-                    stream.shutdown(net::Shutdown::Both)?;
+                    stream.write_packet_ack(None)?;
 
-                    return Ok(());
+                    continue;
                 }
                 io::ErrorKind::ConnectionReset => {
                     log::debug!(
-                        target: &format!("{} {peer_addr}", module_path!()),
-                        "Connection reset by peer"
+                        target: &format!("{} {imei}", module_path!()),
+                        "Connection reset by peer, closing connection"
                     );
 
-                    return Ok(());
+                    break;
                 }
                 _ => {
                     return Err(e);
@@ -183,105 +291,31 @@ impl<'a> Argo<'a> {
             },
         };
 
-        let mut plugins_ref = self.plugins.borrow_mut();
-        let mut allowed_plugins: Vec<&mut Box<dyn Plugin>> = plugins_ref
-            .iter_mut()
-            .filter_map(|plugin| {
-                if plugin.can_teltonika_connect(&imei) {
-                    Some(plugin)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if allowed_plugins.is_empty() {
-            log::debug!(
-                target: &format!("{} {imei:15} ({peer_addr})", module_path!()),
-                "Connection denied, sending IMEI Denial"
-            );
-            teltonika_stream.write_imei_denial()?;
-            stream
-                .shutdown(net::Shutdown::Both)
-                .expect("Cannot shutdown connection");
-
-            // TODO: Do I consider this as handled or as an error?
-            return Ok(());
-        }
-
-        log::debug!(
-            target: &format!("{} {imei:15} ({peer_addr})", module_path!()),
-            "Connection accepted, sending IMEI Approval"
-        );
-
-        teltonika_stream.write_imei_approval()?;
-
-        for listener in allowed_plugins.iter_mut() {
-            listener.on_teltonika_connected(&imei);
-        }
-
-        // Last packet to check if the packet is a duplicate (eg. sent before receiving ACK)
-        let mut last_packet: Option<AVLPacket> = None;
-
-        // Infinitely read packets
-        'packet_loop: loop {
-            let packet = match teltonika_stream.read_packet() {
-                Ok(packet) => {
-                    teltonika_stream.write_packet_ack(Some(packet.records.len() as u32))?;
-
-                    packet
-                }
-                Err(e) => match e.kind() {
-                    io::ErrorKind::InvalidData => {
-                        log::error!(
-                            target: &format!("{} {imei}", module_path!()),
-                            "Error parsing packet, sending NACK",
-                        );
-
-                        teltonika_stream.write_packet_ack(None)?;
-
-                        continue;
-                    }
-                    io::ErrorKind::ConnectionReset => {
-                        log::debug!(
-                            target: &format!("{} {imei}", module_path!()),
-                            "Connection reset by peer, closing connection"
-                        );
-
-                        break;
-                    }
-                    _ => {
-                        return Err(e);
-                    }
-                },
-            };
-
-            // Check if the packet is a duplicate
-            if let Some(last_packet) = &last_packet {
-                // should be different every packet, i think i will hardly find two packets with the same crc one after the other
-                if last_packet.crc16 == packet.crc16
-                    && last_packet.records[0].timestamp == packet.records[0].timestamp
-                {
-                    log::debug!(
-                        target: &format!("{} {imei}", module_path!()),
-                        "Packet is a duplicate, ignoring"
-                    );
-                    continue 'packet_loop;
-                }
-            }
-            last_packet = Some(packet.clone());
-
-            let event: TeltonikaEvent = packet.into();
-
-            for listener in allowed_plugins.iter_mut() {
-                listener.on_teltonika_event(&imei, &event);
+        // Check if the packet is a duplicate
+        if let Some(last_packet) = &last_packet {
+            // should be different every packet, i think i will hardly find two packets with the same crc one after the other
+            if last_packet.crc16 == packet.crc16
+                && last_packet.records[0].timestamp == packet.records[0].timestamp
+            {
+                log::debug!(
+                    target: &format!("{} {imei}", module_path!()),
+                    "Packet is a duplicate, ignoring"
+                );
+                continue 'packet_loop;
             }
         }
+        last_packet = Some(packet.clone());
 
-        for listener in allowed_plugins.iter_mut() {
-            listener.on_teltonika_disconnected(&imei);
+        let event: TeltonikaEvent = packet.into();
+
+        for plugin in allowed_plugins.iter_mut() {
+            plugin.lock().unwrap().on_teltonika_event(&imei, &event);
         }
-
-        Ok(())
     }
+
+    for plugin in allowed_plugins.iter_mut() {
+        plugin.lock().unwrap().on_teltonika_disconnected(&imei);
+    }
+
+    Ok(())
 }

@@ -24,6 +24,10 @@ impl Plugin for TestRedis {
 }
 
 fn main() -> io::Result<()> {
+    std::panic::set_hook(Box::new(|panic_info| {
+        log::error!("{}", panic_info);
+    }));
+
     env_logger::init();
     let mut a = Argo::new("127.0.0.1:56552");
 
