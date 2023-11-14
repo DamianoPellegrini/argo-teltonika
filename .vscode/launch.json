@@ -29,16 +29,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'client-simulator'",
+            "name": "Debug example 'client-simulator'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=client-simulator",
+                    "--example=client-simulator",
                     "--package=argo-teltonika"
                 ],
                 "filter": {
                     "name": "client-simulator",
-                    "kind": "bin"
+                    "kind": "example"
                 }
             },
             "args": [],
@@ -50,17 +50,17 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'client-simulator'",
+            "name": "Debug unit tests in example 'client-simulator'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=client-simulator",
+                    "--example=client-simulator",
                     "--package=argo-teltonika"
                 ],
                 "filter": {
                     "name": "client-simulator",
-                    "kind": "bin"
+                    "kind": "example"
                 }
             },
             "args": [],
@@ -72,16 +72,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'server'",
+            "name": "Debug example 'server'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=server",
+                    "--example=server",
                     "--package=argo-teltonika"
                 ],
                 "filter": {
                     "name": "server",
-                    "kind": "bin"
+                    "kind": "example"
                 }
             },
             "args": [],
@@ -93,17 +93,17 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'server'",
+            "name": "Debug unit tests in example 'server'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=server",
+                    "--example=server",
                     "--package=argo-teltonika"
                 ],
                 "filter": {
                     "name": "server",
-                    "kind": "bin"
+                    "kind": "example"
                 }
             },
             "args": [],
