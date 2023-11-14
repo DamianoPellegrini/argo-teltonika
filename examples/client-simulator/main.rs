@@ -7,7 +7,7 @@ use std::{
 
 use std::time::Duration;
 
-use nom_teltonika::{AVLEventIO, AVLPacket, AVLRecord};
+use nom_teltonika::{AVLEventIO, AVLFrame, AVLRecord};
 
 mod serializer;
 
@@ -53,8 +53,8 @@ fn main() -> std::io::Result<()> {
     }
 
     loop {
-        println!("Generating packet...");
-        let mut packet = AVLPacket {
+        println!("Generating frame...");
+        let mut frame = AVLFrame {
             codec: nom_teltonika::Codec::C8,
             records: vec![AVLRecord {
                 timestamp: chrono::TimeZone::timestamp_millis_opt(
@@ -101,7 +101,7 @@ fn main() -> std::io::Result<()> {
         
         if chrono::Utc::now().timestamp() % 2 == 1 {
             sleep(Duration::from_millis(100));
-            packet.records.push(AVLRecord {
+            frame.records.push(AVLRecord {
                 timestamp: chrono::TimeZone::timestamp_millis_opt(
                     &chrono::Utc,
                     chrono::Utc::now().timestamp_millis(),
@@ -132,7 +132,7 @@ fn main() -> std::io::Result<()> {
 
         if chrono::Utc::now().timestamp() % 3 == 0 {
             sleep(Duration::from_millis(100));
-            packet.records.push(AVLRecord {
+            frame.records.push(AVLRecord {
                 timestamp: chrono::TimeZone::timestamp_millis_opt(
                     &chrono::Utc,
                     chrono::Utc::now().timestamp_millis(),
@@ -161,14 +161,14 @@ fn main() -> std::io::Result<()> {
             });
         }
 
-        let packet_buf = serializer::get_packet_buffer(&packet);
+        let frame_buf = serializer::get_packet_buffer(&frame);
 
-        println!("Sending {} record(s)", packet.records.len());
+        println!("Sending {} record(s)", frame.records.len());
         // Resend if not ACK'd
         loop {
             let mut total_bytes_written = 0;
             loop {
-                let bytes_written = connection.write(&packet_buf)?;
+                let bytes_written = connection.write(&frame_buf)?;
                 connection.flush()?;
 
                 if bytes_written == 0 {
@@ -178,7 +178,7 @@ fn main() -> std::io::Result<()> {
 
                 total_bytes_written += bytes_written;
 
-                if total_bytes_written == packet_buf.len() {
+                if total_bytes_written == frame_buf.len() {
                     break;
                 }
             }
@@ -195,10 +195,10 @@ fn main() -> std::io::Result<()> {
             println!("Received ACK ({data_len} record(s))");
 
             // ACK
-            if data_len == packet.records.len() as u32 {
+            if data_len == frame.records.len() as u32 {
                 break;
             } else {
-                println!("Resending packet...");
+                println!("Resending frame...");
                 sleep(Duration::from_millis(100));
             }
         }

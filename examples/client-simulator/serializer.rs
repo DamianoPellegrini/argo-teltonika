@@ -46,7 +46,7 @@ pub fn get_event_count_buffer(codec: &nom_teltonika::Codec, event_count: u16) ->
     }
 }
 
-pub fn get_packet_buffer(packet: &nom_teltonika::AVLPacket) -> Vec<u8> {
+pub fn get_packet_buffer(packet: &nom_teltonika::AVLFrame) -> Vec<u8> {
     let data_size: usize = std::mem::size_of::<nom_teltonika::Codec>() + // codec
     std::mem::size_of::<u8>() + // number of elements
 
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_get_packet_buffer() {
-        let mut packet = nom_teltonika::AVLPacket {
+        let mut packet = nom_teltonika::AVLFrame {
             codec: nom_teltonika::Codec::C8,
             records: vec![AVLRecord {
                 timestamp: chrono::TimeZone::timestamp_millis_opt(
