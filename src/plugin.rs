@@ -55,6 +55,9 @@ impl From<&AVLDatagram> for TeltonikaEvent {
 ///
 /// _See the [`PluginHandle`](crate::PluginHandle) and [`PluginHandles`](crate::PluginHandles) for more info._
 pub trait Plugin {
+    fn startup(&mut self) {}
+    fn shutdown(&mut self) {}
+
     #[allow(unused_variables)]
     /// Check if a device is allowed to connect
     fn can_teltonika_connect(&mut self, imei: &str) -> bool {

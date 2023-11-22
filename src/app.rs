@@ -42,6 +42,11 @@ impl Argo {
         let listener = std::net::TcpListener::bind(self.socket_addr)?;
 
         log::info!("Listening on {}", self.socket_addr);
+        
+        log::info!("Starting plugins...");
+        for plugin in self.plugins.read().unwrap().iter() {
+            plugin.lock().expect("Cannot acquire lock").startup();
+        }
 
         let mut handles = vec![];
 
@@ -85,6 +90,11 @@ impl Argo {
                     log::error!("Thread panicked: {:?}", e);
                 }
             }
+        }
+
+        log::info!("Shutting down plugins...");
+        for plugin in self.plugins.read().unwrap().iter() {
+            plugin.lock().expect("Cannot acquire lock").shutdown();
         }
 
         Ok(())
