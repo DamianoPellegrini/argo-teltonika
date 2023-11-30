@@ -31,11 +31,12 @@ impl Argo {
         }
     }
 
-    pub fn add_plugin(&mut self, plugin: impl Plugin + Sync + Send + 'static) {
+    pub fn add_plugin(&mut self, plugin: impl Plugin + Sync + Send + 'static) -> &mut Self {
         self.plugins
             .write()
             .unwrap()
             .push(Mutex::new(Box::new(plugin)));
+        self
     }
 
     pub fn run(&self) -> io::Result<()> {
@@ -61,7 +62,7 @@ impl Argo {
                         "Connection received"
                     );
 
-                    // Clone a ref and lock as readable
+                    // Clone a ref to lock as readable
                     let plugins: PluginHandles = self.plugins.clone();
 
                     let handle =
@@ -106,7 +107,6 @@ fn handle_connection(
     plugins: PluginHandles,
     peer_addr: std::net::SocketAddr,
 ) -> io::Result<()> {
-    // Clone every plugin ref to be locked
     // Each plugin can be locked by the individual threads
     let plugins = plugins
         .read()
