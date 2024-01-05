@@ -43,12 +43,6 @@ impl Argo {
         let listener = std::net::TcpListener::bind(self.socket_addr)?;
 
         log::info!("Listening on {}", self.socket_addr);
-        
-        log::info!("Starting plugins...");
-        for plugin in self.plugins.read().unwrap().iter() {
-            plugin.lock().expect("Cannot acquire lock").startup();
-        }
-
         let mut handles = vec![];
 
         // TODO: Add graceful shutdown with ctrl+c and POSIX signals
@@ -93,11 +87,6 @@ impl Argo {
             }
         }
 
-        log::info!("Shutting down plugins...");
-        for plugin in self.plugins.read().unwrap().iter() {
-            plugin.lock().expect("Cannot acquire lock").shutdown();
-        }
-
         Ok(())
     }
 }
@@ -108,9 +97,7 @@ fn handle_connection(
     peer_addr: std::net::SocketAddr,
 ) -> io::Result<()> {
     // Each plugin can be locked by the individual threads
-    let plugins = plugins
-        .read()
-        .expect("Lock is poisoned");
+    let plugins = plugins.read().expect("Lock is poisoned");
     let mut stream = nom_teltonika::TeltonikaStream::new(stream);
     log::debug!(
         target: &format!("{} {peer_addr}", module_path!()),
@@ -148,7 +135,10 @@ fn handle_connection(
     let allowed_plugins: Vec<_> = plugins
         .iter()
         .filter(|plugin| {
-            plugin.lock().expect("Cannot acquire lock").can_teltonika_connect(&imei)
+            plugin
+                .lock()
+                .expect("Cannot acquire lock")
+                .can_teltonika_connect(&imei)
         })
         .collect(); // Collecting since i don't want to filter every time i loop over the plugins
 
@@ -174,7 +164,10 @@ fn handle_connection(
     stream.write_imei_approval()?;
 
     for plugin in allowed_plugins.iter() {
-        plugin.lock().expect("Cannot acquire lock").on_teltonika_connected(&imei);
+        plugin
+            .lock()
+            .expect("Cannot acquire lock")
+            .on_teltonika_connected(&imei);
     }
 
     // Last frame to check if the frame is a duplicate (eg. sent again before receiving ACK)
@@ -231,12 +224,18 @@ fn handle_connection(
         let event: TeltonikaEvent = frame.into();
 
         for plugin in allowed_plugins.iter() {
-            plugin.lock().expect("Cannot acquire lock").on_teltonika_event(&imei, &event);
+            plugin
+                .lock()
+                .expect("Cannot acquire lock")
+                .on_teltonika_event(&imei, &event);
         }
     }
 
     for plugin in allowed_plugins.iter() {
-        plugin.lock().expect("Cannot acquire lock").on_teltonika_disconnected(&imei);
+        plugin
+            .lock()
+            .expect("Cannot acquire lock")
+            .on_teltonika_disconnected(&imei);
     }
 
     Ok(())

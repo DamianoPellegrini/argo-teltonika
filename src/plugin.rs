@@ -54,9 +54,12 @@ impl From<&AVLDatagram> for TeltonikaEvent {
 /// Each [`Plugin`] will be modified by atmost one thread, thanks to the use of [`std::sync::Mutex`]
 ///
 /// _See the [`PluginHandle`](crate::PluginHandle) and [`PluginHandles`](crate::PluginHandles) for more info._
+/// 
+/// ### Startup/Shutdown
+/// 
+/// To implement a startup routine just implement a [`Plugin`]::new method or [`Default`] trait.
+/// Same goes for shutdown, just implement the [`Drop`] trait.
 pub trait Plugin {
-    fn startup(&mut self) {}
-    fn shutdown(&mut self) {}
 
     #[allow(unused_variables)]
     /// Check if a device is allowed to connect

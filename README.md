@@ -2,13 +2,39 @@
 
 A pluggable, lightweight, and fast TCP server framework for [Teltonika GPS](https://teltonika-gps.com) devices.
 
+> [!CAUTION]
+> Test are not yet implemented, so this crate will not be published to crates.io until they are.
+>
+> Can still be used as a git dependency. Beware of breaking changes, or bugs in general.
+>
+> _Features will be implemented during my free time when i feel like it. Don't expect this to be an actively maintained project, I suggest forking it if needed for any production use._
+
 ## Features
 
-- Logging via the [log](https://docs.rs/log) crate.
+- Logging via the [log](https://docs.rs/log) crate and [DebugPlugin](src/plugin.rs#DebugPlugin).
 
 - Exposed by the [Plugin](src/plugin.rs#Plugin) trait:
   - Filtering connection based on IMEI.
   - Connect, Disconnect & [TeltonikaEvent](src/plugin.rs#TeltonikaEvent) handlers.
+  - Startup & Shutdown using standard rust `::new()` custom fn or `Default` trait and `Drop` trait implementations.
+
+### Planned features
+
+- [ ] More robust API:
+  - [ ] custom error types
+  - [ ] rethink plugin ownership
+  - [ ] review multi-threading model and safety.
+- [ ] Support for async:
+  - [ ] AsyncPlugins
+  - [ ] AsyncServer
+- [ ] Tests.
+- [ ] Support for the [tracing](https://docs.rs/tracing) crate.
+- [ ] Support for UDP connections.
+- [ ] Support for custom packet parsing.
+- [ ] More complex examples
+  - [x] Redis server
+  - [ ] HTTP server
+  - [ ] Websocket server
 
 ## Examples
 
@@ -57,4 +83,4 @@ fn main() -> io::Result<()> {
 }
 ```
 
-*Further examples can be found in the [examples folder](examples/).*
+*Further examples, such as a redis connected server, can be found in the [examples folder](examples/).*

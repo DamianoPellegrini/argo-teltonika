@@ -15,3 +15,4 @@ nom-teltonika = "0.1"
 [dev-dependencies]
 chrono = "0.4"
 env_logger = "0.10"
+redis = "0.24.0"

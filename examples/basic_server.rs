@@ -8,6 +8,7 @@ struct HashMapPlugin {
 }
 
 impl Plugin for HashMapPlugin {
+
     fn can_teltonika_connect(&mut self, imei: &str) -> bool {
         let can_connect = self.allowlist.iter().any(|a| a == imei);
 
@@ -47,10 +48,12 @@ fn main() -> io::Result<()> {
     let mut a = Argo::new("127.0.0.1:56552");
 
     a.add_plugin(HashMapPlugin {
-        allowlist: vec!["DAMIPEL28092001".to_string()],
+        allowlist: vec!["IMEI0123456789A".to_string()],
         // allowlist: vec![],
         map: std::collections::HashMap::new(),
     });
+
     a.run()?;
+
     Ok(())
 }

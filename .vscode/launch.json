@@ -29,15 +29,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug example 'client-simulator'",
+            "name": "Debug example 'client_simulator'",
             "cargo": {
                 "args": [
                     "build",
-                    "--example=client-simulator",
+                    "--example=client_simulator",
                     "--package=argo-teltonika"
                 ],
                 "filter": {
-                    "name": "client-simulator",
+                    "name": "client_simulator",
                     "kind": "example"
                 }
             },
@@ -50,16 +50,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in example 'client-simulator'",
+            "name": "Debug unit tests in example 'client_simulator'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--example=client-simulator",
+                    "--example=client_simulator",
                     "--package=argo-teltonika"
                 ],
                 "filter": {
-                    "name": "client-simulator",
+                    "name": "client_simulator",
                     "kind": "example"
                 }
             },
@@ -72,15 +72,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug example 'server'",
+            "name": "Debug example 'redis_server'",
             "cargo": {
                 "args": [
                     "build",
-                    "--example=server",
+                    "--example=redis_server",
                     "--package=argo-teltonika"
                 ],
                 "filter": {
-                    "name": "server",
+                    "name": "redis_server",
                     "kind": "example"
                 }
             },
@@ -93,16 +93,59 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in example 'server'",
+            "name": "Debug unit tests in example 'redis_server'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--example=server",
+                    "--example=redis_server",
                     "--package=argo-teltonika"
                 ],
                 "filter": {
-                    "name": "server",
+                    "name": "redis_server",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug example 'basic_server'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--example=basic_server",
+                    "--package=argo-teltonika"
+                ],
+                "filter": {
+                    "name": "basic_server",
+                    "kind": "example"
+                }
+            },
+            "args": [],
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in example 'basic_server'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--example=basic_server",
+                    "--package=argo-teltonika"
+                ],
+                "filter": {
+                    "name": "basic_server",
                     "kind": "example"
                 }
             },
